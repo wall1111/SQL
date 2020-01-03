@@ -1,0 +1,659 @@
+hive -e "
+    INSERT OVERWRITE TABLE wlive.dws_wlive_user_stat_yearly_2 PARTITION(curdate='20200101')
+    select 
+    a.user_id,
+    a.regist_days,
+    b.total_stay_time,
+    c.most_often_stay_time,
+    d.friend_num,
+    e.follower_num,
+    f.receive_gift_user_num,
+    f.receive_gift_num, 
+    f.receive_gift_diamond, 
+    g.receive_most_num_gift,
+    h.receive_most_expensive_gift,
+    i.receive_most_diamond_user,
+    j.send_gift_user_num, 
+    j.send_gift_num, 
+    j.send_gift_diamond, 
+    k.send_most_num_gift,
+    l.send_most_expensive_gift,
+    m.send_most_diamond_user,
+    n.enter_room_num,
+    o.following_room_num,
+    p.max_stay_time_room,
+    p.max_stay_time, 
+    p.max_stay_time_date,
+    q.total_mic_up_time,
+    r.max_mic_up_time_room, 
+    r.max_mic_up_time, 
+    r.max_mic_up_time_date, 
+    s.personal_room_total_stay_time,
+    t.personal_room_active_user_num,
+    u.personal_room_follower_num,
+    v.personal_room_send_gift_user_num,
+    w.personal_room_max_daily_active_user_num,
+    x.recharge
+from ( 
+    -- regist_days
+    
+    select 
+        user_id,
+        case 
+            when 1577836799.0 > created_at then ceil((1577836799.0 - created_at) / 86400) 
+            else 0 
+        end as regist_days
+    from (
+        select 
+            id as user_id,
+            min(created_at) as created_at
+        from
+            wlive.dim_user
+        where
+            curdate between '20190101' and '20200103'
+        group by
+            id
+        ) as a
+    ) as a
+left join ( 
+    -- total_stay_time
+    
+    select 
+        user_id,
+        sum(length) * 1.2 / 3600 as total_stay_time
+    from 
+        wlive.log_user_online
+    where
+        curdate between '20190101' and '20191231'
+        and action = 'room'
+        and length < 86400
+    group by
+        user_id
+    ) as b
+on 
+    a.user_id = b.user_id
+left join (
+    -- most_often_stay_time
+    
+    select
+        user_id,
+        stay_time as most_often_stay_time,
+        curdate_cnt
+    from (
+        select 
+            *,
+            row_number() over(partition by user_id order by curdate_cnt desc) as row_number
+        from (
+            select 
+                user_id,
+                FROM_UNIXTIME(start_time + 3 * 3600,'HH') as stay_time,
+                count(distinct curdate) as curdate_cnt
+            from 
+                wlive.log_user_online
+            where
+                curdate between '20190101' and '20191231'
+                and length < 86400
+            group by
+                user_id, FROM_UNIXTIME(start_time + 3 * 3600,'HH')
+            ) as a
+        ) as b
+    where 
+        b.row_number = 1
+    ) as c
+on 
+    a.user_id = c.user_id
+left join (
+    -- friend_num
+    
+    select
+        user_id,
+        count(distinct friend_id) as friend_num
+    from
+        wlive.user_friend
+    where
+        curdate between '20190101' and '20191231'
+        and is_del = 0
+    group by
+        user_id
+    ) as d
+on
+    a.user_id = d.user_id
+left join (    
+    -- follower_num
+    
+    select
+        friend_id as user_id,
+        count(distinct user_id) as follower_num
+    from
+        wlive.user_friend
+    where
+        curdate between '20190101' and '20191231'
+        and is_del = 0
+    group by
+        friend_id
+    ) as e
+on
+    a.user_id = e.user_id
+left join (    
+    -- receive_gift_user_num 
+    -- receive_gift_num 
+    -- receive_gift_diamond 
+    
+    select
+        receiver_id as user_id,
+        count(distinct giver_id) as receive_gift_user_num,
+        sum(amount) as receive_gift_num,
+        sum(diamond) as receive_gift_diamond
+    from
+        wlive.presentations
+    where
+        curdate between '20190101' and '20191231'
+    group by
+        receiver_id
+    ) as f
+on
+    a.user_id = f.user_id
+left join (
+    -- receive_most_num_gift 
+    
+    select 
+        user_id,
+        concat_ws(',',collect_set(concat_ws(':',cast(c.gift_id as string), cast(c.amount as string)))) as receive_most_num_gift
+    from (
+        select
+            user_id,
+            gift_id,
+            amount
+        from (
+            select 
+                *,
+                row_number() over(partition by user_id order by amount desc) as row_number
+            from (
+                select
+                    receiver_id as user_id,
+                    gift_id,
+                    sum(amount) as amount
+                from
+                    wlive.presentations
+                where
+                    curdate between '20190101' and '20191231'
+                group by
+                    receiver_id, gift_id
+                ) as a
+            ) as b
+        where b.row_number <= 3
+        ) as c
+    group by
+        user_id
+    ) as g
+on
+    a.user_id = g.user_id
+left join (
+    -- receive_most_expensive_gift 
+    
+    select 
+        user_id,
+        concat_ws(',',collect_set(concat_ws(':',cast(c.gift_id as string), cast(c.amount as string)))) as receive_most_expensive_gift
+    from (
+        select
+            user_id,
+            gift_id,
+            amount,
+            gift_price
+        from (
+            select 
+                *,
+                row_number() over(partition by user_id order by gift_price desc, amount desc) as row_number
+            from (
+                select
+                    receiver_id as user_id,
+                    gift_id,
+                    sum(amount) as amount,
+                    max(gift_price) as gift_price
+                from
+                    wlive.presentations
+                where
+                    curdate between '20190101' and '20191231'
+                group by
+                    receiver_id, gift_id
+                ) as a
+            ) as b
+        where b.row_number <= 3
+        ) as c
+    group by
+        user_id
+    ) as h
+on
+    a.user_id = h.user_id
+left join (
+    -- receive_most_diamond_user 
+    
+    select
+        user_id,
+        receive_gift_user as receive_most_diamond_user
+    from (
+        select 
+            *,
+            row_number() over(partition by user_id order by receive_gift_diamond desc) as row_number
+        from (
+            select
+                receiver_id as user_id,
+                giver_id as  receive_gift_user,
+                sum(diamond) as receive_gift_diamond
+            from
+                wlive.presentations
+            where
+                curdate between '20190101' and '20191231'
+            group by
+                receiver_id, giver_id
+            ) as a
+        ) as b
+    where b.row_number = 1
+    ) as i
+on
+    a.user_id = i.user_id
+left join (
+    -- send_gift_user_num 
+    -- send_gift_num 
+    -- send_gift_diamond 
+    
+    select
+        giver_id as user_id,
+        count(distinct receiver_id) as send_gift_user_num,
+        sum(amount) as send_gift_num,
+        sum(diamond) as send_gift_diamond
+    from
+        wlive.presentations
+    where
+        curdate between '20190101' and '20191231'
+    group by
+        giver_id
+    ) as j
+on 
+    a.user_id = j.user_id
+left join (
+    -- send_most_num_gift 
+    
+    select 
+        user_id,
+        concat_ws(',',collect_set(concat_ws(':',cast(c.gift_id as string), cast(c.amount as string)))) as send_most_num_gift
+    from (
+        select
+            user_id,
+            gift_id,
+            amount
+        from (
+            select 
+                *,
+                row_number() over(partition by user_id order by amount desc) as row_number
+            from (
+                select
+                    giver_id as user_id,
+                    gift_id,
+                    sum(amount) as amount
+                from
+                    wlive.presentations
+                where
+                    curdate between '20190101' and '20191231'
+                group by
+                    giver_id, gift_id
+                ) as a
+            ) as b
+        where b.row_number <= 3
+        ) as c
+    group by
+        user_id
+    ) as k
+on 
+    a.user_id = k.user_id
+left join (
+    -- send_most_expensive_gift 
+    
+    select 
+        user_id,
+        concat_ws(',',collect_set(concat_ws(':',cast(c.gift_id as string), cast(c.amount as string)))) as send_most_expensive_gift
+    from (
+        select
+            user_id,
+            gift_id,
+            amount,
+            gift_price
+        from (
+            select 
+                *,
+                row_number() over(partition by user_id order by gift_price desc, amount desc) as row_number
+            from (
+                select
+                    giver_id as user_id,
+                    gift_id,
+                    sum(amount) as amount,
+                    max(gift_price) as gift_price
+                from
+                    wlive.presentations
+                where
+                    curdate between '20190101' and '20191231'
+                group by
+                    giver_id, gift_id
+                ) as a
+            ) as b
+        where b.row_number <= 3
+        ) as c
+    group by
+        user_id
+    ) as l
+on
+    a.user_id = l.user_id
+left join (
+    -- send_most_diamond_user 
+    
+    select
+        user_id,
+        send_gift_user as send_most_diamond_user
+    from (
+        select 
+            *,
+            row_number() over(partition by user_id order by send_gift_diamond desc) as row_number
+        from (
+            select
+                giver_id as user_id,
+                receiver_id send_gift_user,
+                sum(diamond) as send_gift_diamond
+            from
+                wlive.presentations
+            where
+                curdate between '20190101' and '20191231'
+            group by
+                giver_id, receiver_id
+            ) as a
+        ) as b
+    where b.row_number = 1
+    ) as m
+on
+    a.user_id = m.user_id
+left join (
+    -- enter_room_num 
+    
+    select 
+        user_id,
+        count(distinct room_id) as enter_room_num
+    from 
+        wlive.log_user_online
+    where
+        curdate between '20190101' and '20191231'
+        and length < 86400
+    group by
+        user_id
+    ) as n
+on 
+    a.user_id = n.user_id
+left join (
+    -- following_room_num 
+    
+    select
+        user_id,
+        count(distinct room_id) as following_room_num
+    from
+        wlive.member_room
+    where
+        curdate between '20190101' and '20191231'
+    group by
+        user_id
+    ) as o
+on
+    a.user_id = o.user_id
+left join (
+    -- max_stay_time_room 
+    -- max_stay_time 
+    -- max_stay_time_date 
+    
+    select
+        user_id,
+        room_id as max_stay_time_room,
+        stay_time / 3600 as max_stay_time,
+        curdate as max_stay_time_date
+    from (
+        select 
+            *,
+            row_number() over(partition by user_id order by stay_time desc) as row_number
+        from (
+            select 
+                user_id,
+                room_id,
+                curdate,
+                sum(length) as stay_time
+            from  
+                wlive.log_user_online
+            where
+                curdate between '20190101' and '20191231'
+                and action = 'room'
+                and length < 86400
+            group by
+                user_id, room_id, curdate
+            ) as a
+        ) as b
+    where b.row_number = 1
+    ) as p
+on
+    a.user_id = p.user_id
+left join (
+    -- total_mic_up_time 
+    
+    select 
+        user_id,
+        sum(length) / 3600 as total_mic_up_time
+    from 
+        wlive.log_user_online
+    where
+        curdate between '20190101' and '20191231'
+        and action = 'mic'
+        and length < 86400
+    group by
+        user_id
+    ) as q
+on
+    a.user_id = q.user_id
+left join (
+    -- max_mic_up_time_room 
+    -- max_mic_up_time 
+    -- max_mic_up_time_date 
+    
+    select
+        user_id,
+        room_id as max_mic_up_time_room,
+        mic_up_time / 3600 as max_mic_up_time,
+        curdate as max_mic_up_time_date
+    from (
+        select 
+            *,
+            row_number() over(partition by user_id order by mic_up_time desc) as row_number
+        from (
+            select 
+                user_id,
+                room_id,
+                curdate,
+                sum(length) as mic_up_time
+            from  
+                wlive.log_user_online
+            where
+                curdate between '20190101' and '20191231'
+                and action = 'mic'
+                and length < 86400
+            group by
+                user_id, room_id, curdate
+            ) as a
+        ) as b
+    where b.row_number = 1
+    ) as r
+on
+    a.user_id = r.user_id
+left join (
+    -- personal_room_total_stay_time 
+    
+    select
+        b.user_id,
+        a.room_id,
+        a.personal_room_total_stay_time
+    from (
+        select 
+            room_id,
+            user_id, 
+            sum(length) / 3600 as personal_room_total_stay_time
+        from 
+            wlive.log_user_online
+        where
+            curdate between '20190101' and '20191231'
+            and action='room'
+            and length < 86400
+        group by
+            room_id, user_id
+        ) as a
+    inner join
+        wlive.dim_room as b
+    on
+        a.room_id = b.id
+        and a.user_id = b.user_id
+        and b.curdate = '20200101'
+    where
+        b.live = 0
+    ) as s
+on
+    a.user_id = s.user_id
+left join (
+    -- personal_room_active_user_num 
+    
+    select 
+        user_id,
+        room_id,
+        personal_room_active_user_num
+    from (
+        select 
+            room_id,
+            count(distinct user_id) as personal_room_active_user_num
+        from 
+            wlive.log_user_online
+        where
+            curdate between '20190101' and '20191231'
+            and length < 86400
+        group by
+            room_id
+        ) as a
+    left join
+        wlive.dim_room as b
+    on
+        a.room_id = b.id
+        and b.curdate = '20200101'
+    where
+        b.live = 0
+    ) as t
+on
+    a.user_id = t.user_id
+left join (
+    -- personal_room_follower_num 
+    
+    select
+        user_id,
+        room_id,
+        personal_room_follower_num
+    from (
+        select
+            room_id,
+            count(distinct user_id) as personal_room_follower_num
+        from
+            wlive.member_room
+        where
+            curdate between '20190101' and '20191231'
+        group by
+            room_id
+        ) as a
+    left join
+        wlive.dim_room as b
+    on
+        a.room_id = b.id
+        and b.curdate = '20200101'
+    where
+        b.live = 0
+    ) as u
+on
+    a.user_id = u.user_id
+left join (
+    -- personal_room_send_gift_user_num 
+    
+    select
+        user_id,
+        room_id,
+        personal_room_send_gift_user_num
+    from (
+        select
+            room_id,
+            count(distinct giver_id) as personal_room_send_gift_user_num
+        from
+            wlive.presentations
+        where
+            curdate between '20190101' and '20191231'
+        group by
+            room_id
+        ) as a
+    left join
+        wlive.dim_room as b
+    on
+        a.room_id = b.id
+        and b.curdate = '20200101'
+    where
+        b.live = 0
+    ) as v
+on
+    a.user_id = v.user_id
+left join (
+    -- personal_room_max_daily_active_user_num 
+    
+    select
+        user_id,
+        room_id,
+        user_cnt as personal_room_max_daily_active_user_num
+    from (
+        select 
+            *,
+            row_number() over(partition by room_id order by user_cnt desc) as row_number
+        from (
+            select 
+                room_id,
+                curdate,
+                count(distinct user_id) user_cnt
+            from  
+                wlive.log_user_online
+            where
+                curdate between '20190101' and '20191231'
+                and length < 86400
+            group by
+                room_id, curdate
+            ) as a
+        ) as b
+    left join
+        wlive.dim_room as c
+    on
+        b.room_id = c.id
+        and c.curdate = '20200101'
+    where 
+        b.row_number = 1
+        and c.live = 0
+    ) as w
+on
+    a.user_id = w.user_id
+left join (
+    -- recharge 
+    
+    select
+        user_id,
+        sum(product_price) as recharge
+    from 
+        wlive.recharges 
+    where 
+        refund_st = 0
+        and order_id != ''
+        and env_type != 2
+        and curdate between '20190101' and '20191231'
+    group by 
+        user_id
+    ) as x
+on
+    a.user_id = x.user_id
